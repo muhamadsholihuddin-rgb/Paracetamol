@@ -1,0 +1,175 @@
+<!doctype html>
+<html lang="id">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Kompres Berkas — PDF 900 KB &amp; JPG 450 KB</title>
+<link href="https://fonts.googleapis.com/css2?family=Bricolage+Grotesque:wght@400;600;800&display=swap" rel="stylesheet">
+<script src="https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.min.js"></script>
+<script src="https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js"></script>
+<style>
+:root{--bg:#eef1ec;--panel:#fafbf8;--ink:#16241d;--mute:#5d6b63;--line:#c9d1c6;--acc:#1f5e4b;--warn:#a8431f}
+*{box-sizing:border-box}
+body{margin:0;background:var(--bg);color:var(--ink);font-family:"Bricolage Grotesque",system-ui,sans-serif;line-height:1.5}
+main{max-width:720px;margin:0 auto;padding:32px 18px 64px}
+h1{font-size:clamp(28px,6vw,44px);line-height:1.05;margin:0 0 10px;font-weight:800;letter-spacing:-.02em}
+.sub{color:var(--mute);margin:0 0 28px;max-width:56ch}
+.targets{display:flex;gap:12px;flex-wrap:wrap;margin-bottom:14px}
+.targets label{flex:1 1 150px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:14px;color:var(--mute)}
+.targets input[type=number]{display:block;width:100%;border:0;background:none;font:inherit;font-size:24px;font-weight:600;color:var(--ink);padding:2px 0;outline:none}
+.targets label:focus-within{border-color:var(--acc);box-shadow:0 0 0 2px #1f5e4b33}
+.opt{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--mute);margin-bottom:18px}
+#drop{display:block;border:2px dashed var(--acc);border-radius:10px;padding:44px 18px;text-align:center;cursor:pointer;background:var(--panel);transition:background .15s}
+#drop:hover,#drop.over,#drop:focus-within{background:#e3ede7}
+#drop b{font-size:20px;display:block}
+#drop span{color:var(--mute);font-size:14px}
+#file{position:absolute;opacity:0;width:1px;height:1px}
+ul{list-style:none;padding:0;margin:24px 0 0;display:grid;gap:10px}
+li{background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:12px 14px}
+.name{font-weight:600;word-break:break-all}
+.st{font-size:14px;color:var(--mute);margin-top:2px}
+.st.ok{color:var(--acc)}.st.bad{color:var(--warn)}
+.bar{height:4px;background:var(--line);border-radius:2px;margin-top:8px;overflow:hidden}
+.bar i{display:block;height:100%;width:30%;background:var(--acc);animation:slide 1.1s ease-in-out infinite}
+@keyframes slide{0%{margin-left:-30%}100%{margin-left:100%}}
+.dl{display:inline-block;margin-top:10px;background:var(--acc);color:#fff;text-decoration:none;padding:8px 16px;border-radius:6px;font-weight:600;font-size:15px}
+.dl:focus-visible{outline:3px solid var(--ink);outline-offset:2px}
+.note{margin-top:32px;font-size:13px;color:var(--mute);border-top:1px solid var(--line);padding-top:14px}
+@media (prefers-reduced-motion:reduce){.bar i{animation:none;width:100%}}
+</style>
+</head>
+<body>
+<main>
+<h1>Kompres PDF dan JPG sampai muat.</h1>
+<p class="sub">Untuk berkas verifikasi komitmen di SIKSNG. Berkas diproses di browser kamu dan tidak diunggah ke server mana pun.</p>
+
+<div class="targets">
+  <label>Batas PDF (KB)<input id="tPdf" type="number" value="900" min="50" inputmode="numeric"></label>
+  <label>Batas JPG (KB)<input id="tJpg" type="number" value="450" min="30" inputmode="numeric"></label>
+</div>
+<label class="opt"><input id="gray" type="checkbox"> Hitam-putih (hasil lebih kecil, cocok untuk dokumen teks)</label>
+
+<label id="drop" for="file">
+  <b>Pilih atau seret berkas ke sini</b>
+  <span>PDF, JPG, JPEG, atau PNG. Boleh banyak sekaligus.</span>
+</label>
+<input id="file" type="file" accept="application/pdf,image/*" multiple>
+
+<ul id="list"></ul>
+
+<p class="note">PDF hasil kompres berisi gambar halaman, jadi teksnya tidak bisa diseleksi lagi. Itu yang membuat ukurannya bisa ditekan sekecil ini. Periksa hasilnya sebelum diunggah.</p>
+</main>
+
+<script>
+pdfjsLib.GlobalWorkerOptions.workerSrc='https://cdnjs.cloudflare.com/ajax/libs/pdf.js/3.11.174/pdf.worker.min.js';
+const $=s=>document.querySelector(s);
+const fmt=b=>b>=1048576?(b/1048576).toFixed(2)+' MB':Math.round(b/1024)+' KB';
+const blobOf=(c,q)=>new Promise(r=>c.toBlob(r,'image/jpeg',q));
+
+function toGray(c){
+  const x=c.getContext('2d'),d=x.getImageData(0,0,c.width,c.height),p=d.data;
+  for(let i=0;i<p.length;i+=4){const y=.299*p[i]+.587*p[i+1]+.114*p[i+2];p[i]=p[i+1]=p[i+2]=y}
+  x.putImageData(d,0,0);
+}
+
+async function compressJpg(file,target,g,say){
+  const bmp=await createImageBitmap(file);
+  const base=Math.min(1,2400/Math.max(bmp.width,bmp.height));
+  const steps=[1,.8,.65,.5,.4,.3,.22,.15,.1];
+  for(let si=0;si<steps.length;si++){
+    const last=si===steps.length-1;
+    const w=Math.max(60,Math.round(bmp.width*base*steps[si])),h=Math.max(60,Math.round(bmp.height*base*steps[si]));
+    say(`Mencoba ukuran ${w}×${h} px`);
+    const c=document.createElement('canvas');c.width=w;c.height=h;
+    const x=c.getContext('2d');x.fillStyle='#fff';x.fillRect(0,0,w,h);x.drawImage(bmp,0,0,w,h);
+    if(g)toGray(c);
+    let lo=.2,hi=.92,best=null,bq=0;
+    for(let i=0;i<7;i++){
+      const m=(lo+hi)/2,b=await blobOf(c,m);
+      if(b.size<=target){best=b;bq=m;lo=m}else hi=m;
+    }
+    if(best&&(bq>=.55||last))return{blob:best,ok:true};
+    if(last)return{blob:await blobOf(c,.1),ok:false};
+  }
+}
+
+async function compressPdf(file,target,g,say){
+  const data=new Uint8Array(await file.arrayBuffer());
+  const pdf=await pdfjsLib.getDocument({data}).promise;
+  const n=pdf.numPages,pages=[];
+  for(let i=1;i<=n;i++)pages.push(await pdf.getPage(i));
+  const budget=target-3000-n*700;
+  const widths=[1300,1050,850,700,560,450,360,300];
+  for(let si=0;si<widths.length;si++){
+    const last=si===widths.length-1,cans=[];
+    for(let i=0;i<n;i++){
+      say(`Halaman ${i+1} dari ${n} (percobaan ${si+1}/${widths.length})`);
+      const v1=pages[i].getViewport({scale:1}),vp=pages[i].getViewport({scale:widths[si]/v1.width});
+      const c=document.createElement('canvas');c.width=Math.floor(vp.width);c.height=Math.floor(vp.height);
+      await pages[i].render({canvasContext:c.getContext('2d'),viewport:vp,background:'#ffffff'}).promise;
+      if(g)toGray(c);
+      cans.push({c,w:v1.width,h:v1.height});
+    }
+    let lo=.25,hi=.85,best=null,bq=0;
+    for(let k=0;k<6;k++){
+      const m=(lo+hi)/2,bl=[];let tot=0;
+      for(const p of cans){const b=await blobOf(p.c,m);bl.push(b);tot+=b.size}
+      if(tot<=budget){best=bl;bq=m;lo=m}else hi=m;
+    }
+    if(!best&&last)best=await Promise.all(cans.map(p=>blobOf(p.c,.1)));
+    if(best&&(bq>=.4||last)){
+      say('Menyusun PDF…');
+      const{jsPDF}=window.jspdf;let doc;
+      for(let i=0;i<n;i++){
+        const{w,h}=cans[i],o=w>h?'l':'p';
+        if(i===0)doc=new jsPDF({unit:'pt',format:[w,h],orientation:o,compress:true});
+        else doc.addPage([w,h],o);
+        doc.addImage(new Uint8Array(await best[i].arrayBuffer()),'JPEG',0,0,w,h);
+      }
+      const blob=doc.output('blob');
+      if(blob.size<=target||last)return{blob,ok:blob.size<=target};
+    }
+  }
+}
+
+function addRow(file){
+  const li=document.createElement('li');
+  li.innerHTML='<div class="name"></div><div class="st"></div><div class="bar"><i></i></div>';
+  li.querySelector('.name').textContent=file.name;
+  $('#list').prepend(li);
+  const st=li.querySelector('.st'),bar=li.querySelector('.bar');
+  return{say:t=>st.textContent=t,done:(t,cls)=>{st.textContent=t;st.className='st '+cls;bar.remove()},li};
+}
+
+async function handle(file){
+  const r=addRow(file),g=$('#gray').checked;
+  const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
+  const isImg=file.type.startsWith('image/');
+  if(!isPdf&&!isImg){r.done('Format tidak didukung. Gunakan PDF, JPG, atau PNG.','bad');return}
+  const target=(isPdf?+$('#tPdf').value:+$('#tJpg').value)*1024;
+  const ext=isPdf?'pdf':'jpg',base=file.name.replace(/\.[^.]+$/,'');
+  try{
+    if(file.size<=target&&(isPdf||/jpe?g/i.test(file.type))){
+      r.done(`Sudah ${fmt(file.size)}, di bawah batas. Tidak perlu dikompres.`,'ok');return;
+    }
+    r.say('Memproses…');
+    const res=isPdf?await compressPdf(file,target,g,r.say):await compressJpg(file,target,g,r.say);
+    const url=URL.createObjectURL(res.blob);
+    r.done(res.ok?`${fmt(file.size)} → ${fmt(res.blob.size)}`:`${fmt(file.size)} → ${fmt(res.blob.size)} (masih di atas batas, coba aktifkan hitam-putih)`,res.ok?'ok':'bad');
+    const a=document.createElement('a');a.className='dl';a.href=url;a.download=`${base}_${Math.round(target/1024)}kb.${ext}`;a.textContent='Unduh hasil';
+    r.li.appendChild(a);
+  }catch(e){
+    console.error(e);
+    r.done(/password/i.test(e.message||'')?'PDF terkunci dengan kata sandi. Buka kuncinya dulu.':'Gagal memproses berkas ini. Berkas mungkin rusak.','bad');
+  }
+}
+
+async function run(list){for(const f of list)await handle(f)}
+$('#file').addEventListener('change',e=>{run([...e.target.files]);e.target.value=''});
+const drop=$('#drop');
+['dragover','dragenter'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.add('over')}));
+['dragleave','drop'].forEach(t=>drop.addEventListener(t,e=>{e.preventDefault();drop.classList.remove('over')}));
+drop.addEventListener('drop',e=>run([...e.dataTransfer.files]));
+</script>
+</body>
+</html>
