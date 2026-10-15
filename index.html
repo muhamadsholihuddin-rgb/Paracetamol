@@ -18,6 +18,9 @@ h1{font-size:clamp(28px,6vw,44px);line-height:1.05;margin:0 0 10px;font-weight:8
 .targets label{flex:1 1 150px;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:14px;color:var(--mute)}
 .targets input[type=number]{display:block;width:100%;border:0;background:none;font:inherit;font-size:24px;font-weight:600;color:var(--ink);padding:2px 0;outline:none}
 .targets label:focus-within{border-color:var(--acc);box-shadow:0 0 0 2px #1f5e4b33}
+.modes{display:flex;gap:8px;margin:0 0 14px}
+.modes label{flex:1;background:var(--panel);border:1px solid var(--line);border-radius:6px;padding:10px 12px;font-size:14px;font-weight:600;cursor:pointer;display:flex;gap:8px;align-items:center}
+.modes label:has(input:checked){border-color:var(--acc);background:#e3ede7;color:var(--acc)}
 .opt{display:flex;gap:8px;align-items:center;font-size:14px;color:var(--mute);margin-bottom:18px}
 #drop{display:block;border:2px dashed var(--acc);border-radius:10px;padding:44px 18px;text-align:center;cursor:pointer;background:var(--panel);transition:background .15s}
 #drop:hover,#drop.over,#drop:focus-within{background:#e3ede7}
@@ -43,21 +46,26 @@ li{background:var(--panel);border:1px solid var(--line);border-radius:6px;paddin
 <h1>Kompres PDF dan JPG sampai muat.</h1>
 <p class="sub">Untuk berkas verifikasi komitmen di SIKSNG. Berkas diproses di browser kamu dan tidak diunggah ke server mana pun.</p>
 
+<div class="modes" role="radiogroup" aria-label="Mode">
+  <label><input type="radio" name="mode" value="zip" checked> Kompres PDF / JPG</label>
+  <label><input type="radio" name="mode" value="img"> PDF jadi gambar</label>
+</div>
 <div class="targets">
   <label>Batas PDF (KB)<input id="tPdf" type="number" value="900" min="50" inputmode="numeric"></label>
   <label>Batas JPG (KB)<input id="tJpg" type="number" value="450" min="30" inputmode="numeric"></label>
+  <label>Batas gambar dari PDF (KB)<input id="tImg" type="number" value="500" min="30" inputmode="numeric"></label>
 </div>
 <label class="opt"><input id="gray" type="checkbox"> Hitam-putih (hasil lebih kecil, cocok untuk dokumen teks)</label>
 
 <label id="drop" for="file">
   <b>Pilih atau seret berkas ke sini</b>
-  <span>PDF, JPG, JPEG, atau PNG. Boleh banyak sekaligus.</span>
+  <span>PDF, JPG, JPEG, atau PNG. Boleh banyak sekaligus. Mode &ldquo;PDF jadi gambar&rdquo; hanya menerima PDF.</span>
 </label>
 <input id="file" type="file" accept="application/pdf,image/*" multiple>
 
 <ul id="list"></ul>
 
-<p class="note">PDF hasil kompres berisi gambar halaman, jadi teksnya tidak bisa diseleksi lagi. Itu yang membuat ukurannya bisa ditekan sekecil ini. Periksa hasilnya sebelum diunggah.</p>
+<p class="note">Mode &ldquo;PDF jadi gambar&rdquo;: PDF satu halaman menjadi satu gambar JPG, PDF multi-halaman digabung menjadi kolase (kisi) dalam satu JPG. Teks di gambar tidak bisa diseleksi, dan semakin banyak halaman, semakin kecil tiap halaman agar muat di batas ukuran. PDF hasil kompres berisi gambar halaman, jadi teksnya tidak bisa diseleksi lagi. Itu yang membuat ukurannya bisa ditekan sekecil ini. Periksa hasilnya sebelum diunggah.</p>
 </main>
 
 <script>
@@ -132,6 +140,42 @@ async function compressPdf(file,target,g,say){
   }
 }
 
+async function pdfToImage(file,target,g,say){
+  const data=new Uint8Array(await file.arrayBuffer());
+  const pdf=await pdfjsLib.getDocument({data}).promise;
+  const n=pdf.numPages,cols=n===1?1:Math.ceil(Math.sqrt(n)),rows=Math.ceil(n/cols),gap=n>1?10:0;
+  const R=Math.min(1600,Math.ceil(2400/cols)),pgs=[];
+  for(let i=1;i<=n;i++){
+    say(`Membaca halaman ${i} dari ${n}`);
+    const pg=await pdf.getPage(i),v1=pg.getViewport({scale:1}),vp=pg.getViewport({scale:R/v1.width});
+    const c=document.createElement('canvas');c.width=Math.floor(vp.width);c.height=Math.floor(vp.height);
+    await pg.render({canvasContext:c.getContext('2d'),viewport:vp,background:'#ffffff'}).promise;
+    pgs.push({c,ar:v1.height/v1.width});
+  }
+  const maxAr=Math.max(...pgs.map(p=>p.ar));
+  const totals=[2400,1900,1500,1200,950,750,580,450,350];
+  for(let si=0;si<totals.length;si++){
+    const last=si===totals.length-1;
+    say(n>1?`Menyusun kolase ${cols}×${rows} (percobaan ${si+1}/${totals.length})`:`Mengompres gambar (percobaan ${si+1}/${totals.length})`);
+    const cw=Math.floor((totals[si]-gap*(cols+1))/cols),ch=Math.round(cw*maxAr);
+    const W=cols*cw+gap*(cols+1),H=rows*ch+gap*(rows+1);
+    const c=document.createElement('canvas');c.width=W;c.height=H;
+    const x=c.getContext('2d');x.fillStyle=n>1?'#dfe3dd':'#fff';x.fillRect(0,0,W,H);
+    pgs.forEach((p,i)=>{
+      const px=gap+(i%cols)*(cw+gap),py=gap+Math.floor(i/cols)*(ch+gap),ph=Math.round(cw*p.ar);
+      x.fillStyle='#fff';x.fillRect(px,py,cw,ph);x.drawImage(p.c,px,py,cw,ph);
+    });
+    if(g)toGray(c);
+    let lo=.3,hi=.92,best=null,bq=0;
+    for(let k=0;k<7;k++){
+      const m=(lo+hi)/2,b=await blobOf(c,m);
+      if(b.size<=target){best=b;bq=m;lo=m}else hi=m;
+    }
+    if(best&&(bq>=.55||last))return{blob:best,ok:true,n};
+    if(last)return{blob:await blobOf(c,.1),ok:false,n};
+  }
+}
+
 function addRow(file){
   const li=document.createElement('li');
   li.innerHTML='<div class="name"></div><div class="st"></div><div class="bar"><i></i></div>';
@@ -146,9 +190,20 @@ async function handle(file){
   const isPdf=file.type==='application/pdf'||/\.pdf$/i.test(file.name);
   const isImg=file.type.startsWith('image/');
   if(!isPdf&&!isImg){r.done('Format tidak didukung. Gunakan PDF, JPG, atau PNG.','bad');return}
-  const target=(isPdf?+$('#tPdf').value:+$('#tJpg').value)*1024;
-  const ext=isPdf?'pdf':'jpg',base=file.name.replace(/\.[^.]+$/,'');
+  const toImg=$('input[name=mode]:checked').value==='img';
+  if(toImg&&!isPdf){r.done('Mode "PDF jadi gambar" hanya untuk berkas PDF.','bad');return}
+  const target=(toImg?+$('#tImg').value:isPdf?+$('#tPdf').value:+$('#tJpg').value)*1024;
+  const ext=(isPdf&&!toImg)?'pdf':'jpg',base=file.name.replace(/\.[^.]+$/,'');
   try{
+    if(toImg){
+      r.say('Memproses…');
+      const res=await pdfToImage(file,target,g,r.say);
+      const url=URL.createObjectURL(res.blob);
+      const info=res.n>1?`${res.n} halaman → 1 kolase`:'1 halaman → 1 gambar';
+      r.done(`${info}, ${fmt(res.blob.size)}`+(res.ok?'':' (masih di atas batas, coba aktifkan hitam-putih)'),res.ok?'ok':'bad');
+      const a=document.createElement('a');a.className='dl';a.href=url;a.download=`${base}_${res.n>1?'kolase_':''}${Math.round(target/1024)}kb.jpg`;a.textContent='Unduh gambar';
+      r.li.appendChild(a);return;
+    }
     if(file.size<=target&&(isPdf||/jpe?g/i.test(file.type))){
       r.done(`Sudah ${fmt(file.size)}, di bawah batas. Tidak perlu dikompres.`,'ok');return;
     }
